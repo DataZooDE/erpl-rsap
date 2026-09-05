@@ -1,0 +1,4 @@
+PKG_CPPFLAGS = -I.
+# The archive is a Rust staticlib, so it wants the platform's usual runtime
+# libraries -- the same set bindings/gorfc names in its cgo_*.go files.
+PKG_LIBS = @ARCHIVE@ @SYSLIBS@

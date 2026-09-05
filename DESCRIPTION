@@ -1,0 +1,15 @@
+Package: rsap
+Type: Package
+Title: SAP RFC Client Without the SAP NW RFC SDK
+Version: 2026.9.5
+Authors@R: person("Data Zoo", role = c("aut", "cre"), email = "info@data-zoo.de")
+Description: Call SAP ABAP function modules from R. The RFC protocol is
+    implemented in Rust and ships prebuilt, so no SAP NW RFC SDK download, no
+    ICU, and no LD_LIBRARY_PATH are needed. Part of ERPL, alongside erpl-pyrfc
+    (Python), erpl-gorfc (Go) and erpl-node-rfc (Node.js).
+URL: https://erpl.io, https://github.com/DataZooDE/erpl-rsap
+BugReports: https://github.com/DataZooDE/erpl-rsap/issues
+License: file LICENSE
+Encoding: UTF-8
+Depends: R (>= 4.0)
+NeedsCompilation: yes

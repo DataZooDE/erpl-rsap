@@ -1,0 +1,6 @@
+# build output: configure writes src/Makevars, R writes the rest
+src/Makevars
+src/*.o
+src/*.so
+*.Rcheck/
+*.tar.gz

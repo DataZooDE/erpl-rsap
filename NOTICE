@@ -1,0 +1,37 @@
+rsap
+Copyright (c) Data Zoo
+
+Licensed under the Business Source License 1.1. See LICENSE.
+
+--------------------------------------------------------------------------
+Provenance
+--------------------------------------------------------------------------
+
+Unlike this repository's Python, Go and Node.js bindings -- which adapt SAP's
+own Apache-2.0 licensed clients -- **no upstream code was adapted here.**
+
+RSAP, the abandoned predecessor, cannot be adapted: its DESCRIPTION declares
+`License: GPL-3`, its README refers instead to the LGPL by way of a COPYING
+file that does not exist in the repository, and `src/RSAP.c` -- the file one
+would most want to learn from -- carries only "Copyright (c) 2012 - and onwards
+Piers Harding. All rights reserved." with no grant at all.
+
+The two predecessors for Ruby and R carry no permissive licence grant:
+
+  * piersharding/ruby-sapnwrfc has no LICENSE file and no `license` field in
+    its gemspec. Its README says only "Released under Ruby's License", by an
+    undated reference.
+  * piersharding/RSAP declares `License: GPL-3` in DESCRIPTION, while its C
+    source carries "All rights reserved" and no grant at all.
+
+Neither was read while implementing this package, and no code from either appears
+in it. The API is designed for modern Ruby rather than reproducing theirs.
+
+The RFC protocol itself is implemented in Rust in `erpl-proto`, whose
+specification is derived solely from this project's own packet captures of
+SAP's `libsapnwrfc` -- never by reading another implementation's source. Other
+implementations are used only as running black boxes, to compare behaviour
+against; `examples/run_both.sh` is that technique mechanised.
+
+"SAP", "ABAP" and "SAP NetWeaver" are trademarks of SAP SE. This project is not
+affiliated with, endorsed by, or supported by SAP SE.

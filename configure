@@ -1,0 +1,57 @@
+#!/bin/sh
+# Picks the bundled archive for this platform and writes src/Makevars.
+#
+# There is deliberately no SDK discovery here. RSAP's configure hunted for
+# sapnwrfc.h and libsapnwrfc under /usr/sap/nwrfcsdk and hard-failed when it
+# could not find them; needing that licence-gated download is the problem this
+# package removes. The header and the archive ship inside it.
+set -e
+
+# The differential harness builds this same source against SAP's real library
+# instead of the bundled archive, so any difference in the output is the
+# protocol implementation's and not the binding's. Nothing else sets this.
+if [ "${RSAP_USE_SAP_SDK}" = "1" ]; then
+  : "${SAPNWRFC_HOME:?RSAP_USE_SAP_SDK=1 needs SAPNWRFC_HOME}"
+  # Not optional: without them SAP's sapucrfc.h silently typedefs SAP_UC to a
+  # 1-byte char while the library keeps writing UTF-16, so every string API
+  # overruns its buffer by 2x -- "stack smashing detected" after an otherwise
+  # successful call. Our own header needs none of this.
+  defines="-DSAPonLIN -DSAPwithUNICODE -DSAPwithTHREADS -D_FILE_OFFSET_BITS=64"
+  {
+    echo "PKG_CPPFLAGS = -I. -I${SAPNWRFC_HOME}/include ${defines}"
+    echo "PKG_LIBS = -L${SAPNWRFC_HOME}/lib -lsapnwrfc -lsapucum"
+  } > src/Makevars
+  echo "rsap: linking SAP's libsapnwrfc from ${SAPNWRFC_HOME}"
+  exit 0
+fi
+
+uname_s=$(uname -s)
+uname_m=$(uname -m)
+
+case "$uname_s" in
+  Linux)  os=linux ;;
+  Darwin) os=darwin ;;
+  *)      os=unknown ;;
+esac
+case "$uname_m" in
+  x86_64|amd64) arch=x86_64 ;;
+  arm64|aarch64) arch=arm64 ;;
+  *) arch="$uname_m" ;;
+esac
+
+case "$os" in
+  linux)  plat="${arch}-linux" ; syslibs="-lm -ldl -lpthread" ;;
+  darwin) plat="${arch}-darwin"; syslibs="-lresolv -framework CoreFoundation -framework Security" ;;
+  *)      plat="${arch}-${os}" ; syslibs="" ;;
+esac
+
+archive="lib/${plat}/libsapnwrfc.a"
+if [ ! -f "src/${archive}" ]; then
+  echo "rsap: no bundled libsapnwrfc.a for ${plat}." >&2
+  echo "rsap: looked for src/${archive}" >&2
+  exit 1
+fi
+
+sed -e "s|@ARCHIVE@|${archive}|g" -e "s|@SYSLIBS@|${syslibs}|g" \
+    src/Makevars.in > src/Makevars
+echo "rsap: linking ${archive}"

@@ -1,0 +1,5 @@
+#!/bin/sh
+# `configure` generates src/Makevars from src/Makevars.in, so it is a build
+# artefact and must not travel in the tarball -- R CMD check says so, and a
+# stale one would silently override the configure step on another platform.
+rm -f src/Makevars

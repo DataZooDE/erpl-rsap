@@ -1,0 +1,4 @@
+useDynLib(rsap, .registration = TRUE, .fixes = "C_")
+export(rsap_connect, rsap_close, rsap_alive, rsap_ping, rsap_info, rsap_call, rsap_read_table)
+S3method(print, rsap_connection)
+S3method(close, rsap_connection)
