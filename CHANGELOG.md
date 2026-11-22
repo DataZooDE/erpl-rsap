@@ -2,9 +2,37 @@
 
 All notable changes to `rsap`. Calendar versioning, `YYYY.M.D`.
 
-## Unreleased
+## 2026.11.22
 
-The first release. Nothing is published yet.
+Built on the current shim. `examples/run_both.sh` against SAP's library: **no
+differences across 47 lines**; 69 live checks pass against a4h (kernel 816).
+
+- **An SAP system with an instance number other than 00 is reached.** The
+  September build announced instance 00 whatever was configured, so the gateway
+  refused the partner or, on a host that also runs an instance 00, logged on to
+  the wrong system.
+- **A call longer than 60 seconds no longer fails** and drops the connection;
+  SAP's library completes it. Logon stays bounded at 60 s.
+- **The connection lives exactly as long as with SAP's library**, measured: a
+  `MESSAGE`-raised failure ends it, a declared exception does not, a short dump
+  is found on the next call. Short dumps are reported as runtime failures
+  (code 3), not as messages.
+- **A signal during a socket read no longer costs the connection.**
+- `DESTINATION 'BACK'` callbacks, `RfcCancel`, and `RFC_BUFFER_TOO_SMALL` with
+  the required length, as SAP's library reports it.
+- Integers are range-checked before any conversion (`1e100` was undefined
+  behaviour), and `NA`, fractions and out-of-range values are refused instead
+  of wrapping. An INT4 of -2147483648 reads back as `NA` (it *is* R's
+  `NA_integer_`; see MIGRATION.md).
+- `DATE`/`TIME` accept exactly eight/six ASCII digits; `NA` or `""` sends the
+  initial value, so a structure read back with an initial date goes back
+  unchanged.
+- A value refused while converting no longer leaks the call's function
+  container (measured: 17.8 MB over 20,000 refusals before, none after).
+
+## 2026.9.5
+
+The first release.
 
 ### What works
 

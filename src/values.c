@@ -12,6 +12,8 @@
  */
 
 #include "rsap.h"
+#include <limits.h>
+#include <math.h>
 
 /* Fixed-width ABAP text is blank-padded to its declared length; the padding is
  * not data. Leading blanks are kept -- they can be significant. */
@@ -369,6 +371,64 @@ static SEXP scalar_of(SEXP value)
     return value;
 }
 
+/* RfcSetDate and RfcSetTime read a fixed eight and six UTF-16 units with no
+ * length of their own, so the width is checked here, in units: strlen counted
+ * UTF-8 bytes, and "\u00e4\u00e4\u00e4\u00e4" is eight bytes but four
+ * units, so the library read past the converted text and sent whatever
+ * followed it. Only ASCII digits are accepted, which makes bytes and units
+ * agree by construction. NULL when the text is not `width` digits; the caller
+ * raises, after releasing what it protected -- this function leaves the
+ * protect stack alone. The buffer is R_alloc'd and released with the call. */
+static SAP_UC *rsap_digits(SEXP text, R_xlen_t width)
+{
+    R_xlen_t units = 0, i;
+    SAP_UC *uc;
+    if (TYPEOF(text) != STRSXP || XLENGTH(text) < 1 || STRING_ELT(text, 0) == NA_STRING) return NULL;
+    uc = rsap_uc_from_r(text, &units);
+    if (units != width) return NULL;
+    for (i = 0; i < width; i++) {
+        if (uc[i] < '0' || uc[i] > '9') return NULL;
+    }
+    return uc;
+}
+
+/* Whether a DATE or TIME value means "initial": NA of any type, or "". An
+ * initial DATE is read back as NA, so a structure read from the system must
+ * be sendable again without the caller rewriting its dates. */
+static int rsap_is_initial(SEXP value)
+{
+    if (XLENGTH(value) < 1) return 1;
+    switch (TYPEOF(value)) {
+        case STRSXP:  return STRING_ELT(value, 0) == NA_STRING || CHAR(STRING_ELT(value, 0))[0] == 0;
+        case LGLSXP:  return LOGICAL(value)[0] == NA_LOGICAL;
+        case INTSXP:  return INTEGER(value)[0] == NA_INTEGER;
+        case REALSXP: return ISNAN(REAL(value)[0]);
+        default:      return 0;
+    }
+}
+
+static const SAP_UC initial_digits[9] = { '0', '0', '0', '0', '0', '0', '0', '0', 0 };
+
+/* An integer for a field of the given range, refused before it is narrowed:
+ * `(RFC_INT1)256` is 0, sent without a word. NA, non-finite and fractional
+ * values are refused too, rather than becoming whatever asInteger makes of
+ * them. The range is checked on the double *before* any cast: converting a
+ * double outside the target type's range (1e100 to a long) is undefined
+ * behaviour in C, not a refusal. `hi_excl` is one past the maximum, so the
+ * INT8 bound, 2^63, is exact as a double. */
+static long long rsap_int_in_range(SEXP value, double lo, double hi_excl, const char *type)
+{
+    double d;
+    if (XLENGTH(value) < 1) Rf_error("an %s field needs a number", type);
+    d = asReal(value);
+    if (ISNAN(d) || !R_FINITE(d)) Rf_error("an %s field cannot be NA or infinite", type);
+    if (d < lo || d >= hi_excl) {
+        Rf_error("%g is out of range for %s (%.0f..%.0f)", d, type, lo, hi_excl - 1);
+    }
+    if (trunc(d) != d) Rf_error("an %s field needs a whole number, got %g", type, d);
+    return (long long)d;
+}
+
 void rsap_field_from_r(DATA_CONTAINER_HANDLE h, const SAP_UC *name,
                        RFCTYPE type, unsigned ulen, RFC_TYPE_DESC_HANDLE ty,
                        SEXP value)
@@ -410,22 +470,23 @@ void rsap_field_from_r(DATA_CONTAINER_HANDLE h, const SAP_UC *name,
             return;
         }
         case RFCTYPE_INT:
-            if (RfcSetInt(h, name, (RFC_INT)asInteger(value), &info) != RFC_OK) {
+            if (RfcSetInt(h, name, (RFC_INT)rsap_int_in_range(value, -2147483648.0, 2147483648.0, "INT4"), &info) != RFC_OK) {
                 rsap_raise(&info, "set int");
             }
             return;
         case RFCTYPE_INT1:
-            if (RfcSetInt1(h, name, (RFC_INT1)asInteger(value), &info) != RFC_OK) {
+            /* Checked before narrowing: a cast would send 256 as 0, silently. */
+            if (RfcSetInt1(h, name, (RFC_INT1)rsap_int_in_range(value, 0.0, 256.0, "INT1"), &info) != RFC_OK) {
                 rsap_raise(&info, "set int1");
             }
             return;
         case RFCTYPE_INT2:
-            if (RfcSetInt2(h, name, (RFC_INT2)asInteger(value), &info) != RFC_OK) {
+            if (RfcSetInt2(h, name, (RFC_INT2)rsap_int_in_range(value, -32768.0, 32768.0, "INT2"), &info) != RFC_OK) {
                 rsap_raise(&info, "set int2");
             }
             return;
         case RFCTYPE_INT8:
-            if (RfcSetInt8(h, name, (RFC_INT8)asReal(value), &info) != RFC_OK) {
+            if (RfcSetInt8(h, name, (RFC_INT8)rsap_int_in_range(value, -9223372036854775808.0, 9223372036854775808.0, "INT8"), &info) != RFC_OK) {
                 rsap_raise(&info, "set int8");
             }
             return;
@@ -435,32 +496,28 @@ void rsap_field_from_r(DATA_CONTAINER_HANDLE h, const SAP_UC *name,
             }
             return;
         case RFCTYPE_DATE: {
-            SEXP text = PROTECT(rsap_as_date_text(value));
-            SAP_UC *uc = rsap_uc_from_r(text, NULL);
+            const SAP_UC *uc = initial_digits;
             RFC_RC rc;
-            if (strlen(CHAR(STRING_ELT(text, 0))) != 8) {
+            if (!rsap_is_initial(value)) {
+                SEXP text = PROTECT(rsap_as_date_text(value));
+                uc = rsap_digits(text, 8);
                 UNPROTECT(1);
-                Rf_error("a DATE needs a Date or eight digits");
+                if (uc == NULL) Rf_error("a DATE needs a Date, eight digits, NA or \"\"");
             }
             rc = RfcSetDate(h, name, uc, &info);
-            UNPROTECT(1);
             if (rc != RFC_OK) rsap_raise(&info, "set date");
             return;
         }
         case RFCTYPE_TIME: {
-            SEXP text = PROTECT(rsap_as_text(value));
-            SAP_UC *uc;
+            const SAP_UC *uc = initial_digits;
             RFC_RC rc;
-            /* RfcSetTime reads a fixed six units with no length of its own, so
-             * a short string would be read past the end. The guard is here;
-             * the width is the C contract. */
-            if (strlen(CHAR(STRING_ELT(text, 0))) != 6) {
+            if (!rsap_is_initial(value)) {
+                SEXP text = PROTECT(rsap_as_text(value));
+                uc = rsap_digits(text, 6);
                 UNPROTECT(1);
-                Rf_error("a TIME needs six digits");
+                if (uc == NULL) Rf_error("a TIME needs six digits, NA or \"\"");
             }
-            uc = rsap_uc_from_r(text, NULL);
             rc = RfcSetTime(h, name, uc, &info);
-            UNPROTECT(1);
             if (rc != RFC_OK) rsap_raise(&info, "set time");
             return;
         }

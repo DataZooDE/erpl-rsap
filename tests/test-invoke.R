@@ -42,6 +42,97 @@ run_suite("invoke", function() {
   expect_equal(d$ECHOSTRUCT$RFCDATE, as.Date("2026-09-05"), "DATE is a Date")
   expect_equal(d$ECHOSTRUCT$RFCTIME, "123456", "TIME stays text")
 
+  # RfcSetDate/RfcSetTime read a fixed eight/six UTF-16 units. "\u00e4" x 4 is
+  # eight UTF-8 bytes but four units; the byte-counting guard let it through
+  # and the library read past the converted text.
+  expect_error(rsap_call(conn, "STFC_STRUCTURE",
+                         IMPORTSTRUCT = list(RFCDATE = "\u00e4\u00e4\u00e4\u00e4")),
+               "eight digits", "a DATE of eight bytes but four characters is refused")
+  expect_error(rsap_call(conn, "STFC_STRUCTURE",
+                         IMPORTSTRUCT = list(RFCTIME = "\u00e4\u00e4\u00e4")),
+               "six digits", "a TIME of six bytes but three characters is refused")
+  expect_error(rsap_call(conn, "STFC_STRUCTURE", IMPORTSTRUCT = list(RFCDATE = "2026O905")),
+               "eight digits", "a DATE that is not digits is refused")
+
+  # Integers are range-checked before they are narrowed: a cast sent 256 as 0.
+  edge <- rsap_call(conn, "STFC_STRUCTURE",
+                    IMPORTSTRUCT = list(RFCINT1 = 0L, RFCINT2 = -32768L))
+  expect_equal(edge$ECHOSTRUCT$RFCINT1, 0L, "INT1 accepts its minimum")
+  expect_equal(edge$ECHOSTRUCT$RFCINT2, -32768L, "INT2 accepts its minimum")
+  expect_error(rsap_call(conn, "STFC_STRUCTURE", IMPORTSTRUCT = list(RFCINT1 = 256L)),
+               "out of range for INT1", "INT1 refuses 256 instead of sending 0")
+  expect_error(rsap_call(conn, "STFC_STRUCTURE", IMPORTSTRUCT = list(RFCINT1 = -1L)),
+               "out of range for INT1", "INT1 refuses -1")
+  expect_error(rsap_call(conn, "STFC_STRUCTURE", IMPORTSTRUCT = list(RFCINT2 = 32768L)),
+               "out of range for INT2", "INT2 refuses 32768")
+  expect_error(rsap_call(conn, "STFC_STRUCTURE", IMPORTSTRUCT = list(RFCINT4 = NA_integer_)),
+               "NA", "an NA integer is refused")
+  expect_error(rsap_call(conn, "STFC_STRUCTURE", IMPORTSTRUCT = list(RFCINT2 = 1.5)),
+               "whole number", "a fractional integer is refused")
+
+  # Far outside any C integer: the range is checked before any cast, since
+  # converting 1e100 to a C integer type is undefined behaviour, not a refusal.
+  for (big in c(1e100, -1e100)) {
+    for (f in c("RFCINT1", "RFCINT2", "RFCINT4")) {
+      expect_error(rsap_call(conn, "STFC_STRUCTURE",
+                             IMPORTSTRUCT = setNames(list(big), f)),
+                   "out of range", paste(f, "refuses", big))
+    }
+  }
+  # -2^31 itself is in range and is sent, but R cannot read it back: INT_MIN
+  # *is* NA_integer_. So the round trip is checked one above it.
+  rsap_call(conn, "STFC_STRUCTURE", IMPORTSTRUCT = list(RFCINT4 = -2147483648))
+  expect(TRUE, "INT4 accepts -2^31, given as a double")
+  top <- rsap_call(conn, "STFC_STRUCTURE",
+                   IMPORTSTRUCT = list(RFCINT1 = 254, RFCINT2 = 32766, RFCINT4 = -2147483647))
+  expect_equal(top$ECHOSTRUCT$RFCINT4, -2147483647L, "INT4 round-trips its smallest representable value")
+  expect_error(rsap_call(conn, "STFC_STRUCTURE", IMPORTSTRUCT = list(RFCINT4 = 2147483648)),
+               "out of range for INT4", "INT4 refuses 2^31")
+  expect_error(rsap_call(conn, "STFC_STRUCTURE", IMPORTSTRUCT = list(RFCINT4 = -2147483649)),
+               "out of range for INT4", "INT4 refuses -2^31 - 1")
+
+  # An initial DATE comes back as NA, so NA -- and "" -- must go back out as the
+  # initial value: a structure read from SAP has to be sendable again unchanged.
+  blank <- rsap_call(conn, "STFC_STRUCTURE", IMPORTSTRUCT = list(RFCCHAR4 = "init"))
+  expect(is.na(blank$ECHOSTRUCT$RFCDATE), "an initial DATE reads as NA")
+  again <- rsap_call(conn, "STFC_STRUCTURE", IMPORTSTRUCT = blank$ECHOSTRUCT)
+  expect(is.na(again$ECHOSTRUCT$RFCDATE), "and an NA DATE is sent back as the initial value")
+  expect_equal(again$ECHOSTRUCT$RFCTIME, blank$ECHOSTRUCT$RFCTIME, "the TIME round-trips with it")
+  empty <- rsap_call(conn, "STFC_STRUCTURE",
+                     IMPORTSTRUCT = list(RFCDATE = "", RFCTIME = ""))
+  expect(is.na(empty$ECHOSTRUCT$RFCDATE), "an empty DATE is the initial value")
+  expect_equal(empty$ECHOSTRUCT$RFCTIME, "000000", "an empty TIME is the initial value")
+  nat <- rsap_call(conn, "STFC_STRUCTURE", IMPORTSTRUCT = list(RFCTIME = NA_character_))
+  expect_equal(nat$ECHOSTRUCT$RFCTIME, "000000", "an NA TIME is the initial value")
+
+  # A value refused *inside* a conversion raises from deep in the C glue, and
+  # the call's function container must be destroyed on that path too (it runs
+  # under R_ExecWithCleanup). Measured, not assumed: the refusal happens before
+  # anything goes on the wire, so many iterations are cheap, and a container
+  # leaked per iteration shows up as resident memory that does not come back.
+  rss_kb <- function() {
+    line <- grep("^VmRSS:", readLines("/proc/self/status"), value = TRUE)
+    as.numeric(gsub("[^0-9]", "", line))
+  }
+  refuse <- function(n) {
+    for (i in seq_len(n)) {
+      tryCatch(rsap_call(conn, "STFC_STRUCTURE",
+                         IMPORTSTRUCT = list(RFCCHAR4 = "abcd", RFCDATE = "not a date"),
+                         RFCTABLE = list(list(RFCCHAR4 = "row1"), list(RFCCHAR4 = "row2"))),
+               error = function(e) NULL)
+    }
+  }
+  if (file.exists("/proc/self/status")) {
+    refuse(2000L)                     # warm up allocator and metadata caches
+    invisible(gc()); before <- rss_kb()
+    refuse(20000L)
+    invisible(gc()); grown <- rss_kb() - before
+    cat("  ..  RSS grew by ", grown, " kB over 20000 refused calls\n", sep = "")
+    expect(grown < 8192, "a refused conversion leaks no function container")
+  }
+  again <- rsap_call(conn, "STFC_CONNECTION", REQUTEXT = "after refusals")
+  expect(startsWith(again$ECHOTEXT, "after refusals"), "and the connection still works")
+
   expect_error(rsap_call(conn, "STFC_CONNECTION", NOT_A_PARAMETER = "x"),
                "NOT_A_PARAMETER", "an undeclared parameter is refused")
 

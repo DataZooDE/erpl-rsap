@@ -25,15 +25,28 @@ static void call_cleanup(void *p)
     }
 }
 
-SEXP C_rsap_call(SEXP ptr, SEXP name, SEXP names, SEXP values)
+struct call_args {
+    SEXP ptr, name, names, values;
+    call_state *st;
+};
+
+/* The whole call, run by R_ExecWithCleanup: anything in here may raise an R
+ * error -- a getter or setter that refuses a value, an unknown field, a
+ * failed call -- and the cleanup still destroys the function container. The
+ * first version freed it by hand before each explicit raise, and every raise
+ * *inside* a conversion skipped it, so a tryCatch loop over a bad structure
+ * field leaked a container and its tables per iteration. */
+static SEXP call_body(void *data)
 {
+    struct call_args *a = (struct call_args *)data;
+    SEXP ptr = a->ptr, name = a->name, names = a->names, values = a->values;
+    call_state *stp = a->st;
     RFC_CONNECTION_HANDLE conn = rsap_conn_handle(ptr);
     RFC_FUNCTION_DESC_HANDLE desc;
     RFC_ERROR_INFO info;
     SAP_UC *fname;
     unsigned count = 0, i;
     R_xlen_t k, given;
-    call_state st = { NULL };
     SEXP out, nms;
     int produced = 0;
 
@@ -43,12 +56,11 @@ SEXP C_rsap_call(SEXP ptr, SEXP name, SEXP names, SEXP values)
     if (desc == NULL) rsap_raise(&info, "function description");
 
     memset(&info, 0, sizeof(info));
-    st.func = RfcCreateFunction(desc, &info);
-    if (st.func == NULL) rsap_raise(&info, "create function");
+    stp->func = RfcCreateFunction(desc, &info);
+    if (stp->func == NULL) rsap_raise(&info, "create function");
     memset(&info, 0, sizeof(info));
     if (RfcGetParameterCount(desc, &count, &info) != RFC_OK) {
-        call_cleanup(&st);
-        rsap_raise(&info, "parameter count");
+                rsap_raise(&info, "parameter count");
     }
 
     /* Inputs. A name the interface does not declare is refused rather than
@@ -63,11 +75,10 @@ SEXP C_rsap_call(SEXP ptr, SEXP name, SEXP names, SEXP values)
             memset(&pd, 0, sizeof(pd));
             memset(&info, 0, sizeof(info));
             if (RfcGetParameterDescByIndex(desc, i, &pd, &info) != RFC_OK) {
-                call_cleanup(&st);
-                rsap_raise(&info, "parameter description");
+                                rsap_raise(&info, "parameter description");
             }
             if (strcmp(CHAR(rsap_r_from_uc(pd.name)), wanted) == 0) {
-                rsap_field_from_r(st.func, pd.name, pd.type, pd.ucLength,
+                rsap_field_from_r(stp->func, pd.name, pd.type, pd.ucLength,
                                   pd.typeDescHandle, VECTOR_ELT(values, k));
                 found = 1;
                 break;
@@ -77,16 +88,14 @@ SEXP C_rsap_call(SEXP ptr, SEXP name, SEXP names, SEXP values)
             char msg[256];
             snprintf(msg, sizeof(msg), "%s has no parameter %s",
                      CHAR(STRING_ELT(name, 0)), wanted);
-            call_cleanup(&st);
-            Rf_error("%s", msg);
+                        Rf_error("%s", msg);
         }
     }
 
     memset(&info, 0, sizeof(info));
-    if (RfcInvoke(conn, st.func, &info) != RFC_OK) {
+    if (RfcInvoke(conn, stp->func, &info) != RFC_OK) {
         RFC_ERROR_INFO failure = info;
-        call_cleanup(&st);
-        rsap_raise(&failure, "invoke");
+                rsap_raise(&failure, "invoke");
     }
 
     /* Outputs: what the call produced, not what the caller supplied. An IMPORT
@@ -102,7 +111,7 @@ SEXP C_rsap_call(SEXP ptr, SEXP name, SEXP names, SEXP values)
         if (pd.direction == RSAP_IMPORT) continue;
         SET_STRING_ELT(nms, produced, rsap_r_from_uc(pd.name));
         SET_VECTOR_ELT(out, produced,
-                       rsap_field_to_r(st.func, pd.name, pd.type, pd.ucLength,
+                       rsap_field_to_r(stp->func, pd.name, pd.type, pd.ucLength,
                                        pd.typeDescHandle));
         produced++;
     }
@@ -116,8 +125,14 @@ SEXP C_rsap_call(SEXP ptr, SEXP name, SEXP names, SEXP values)
             SET_STRING_ELT(tnms, i, STRING_ELT(nms, i));
         }
         setAttrib(trimmed, R_NamesSymbol, tnms);
-        call_cleanup(&st);
         UNPROTECT(4);
         return trimmed;
     }
+}
+
+SEXP C_rsap_call(SEXP ptr, SEXP name, SEXP names, SEXP values)
+{
+    call_state st = { NULL };
+    struct call_args a = { ptr, name, names, values, &st };
+    return R_ExecWithCleanup(call_body, &a, call_cleanup, &st);
 }

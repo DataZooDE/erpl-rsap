@@ -1,7 +1,7 @@
 Package: rsap
 Type: Package
 Title: SAP RFC Client Without the SAP NW RFC SDK
-Version: 2026.9.5
+Version: 2026.11.22
 Authors@R: person("Data Zoo", role = c("aut", "cre"), email = "info@data-zoo.de")
 Description: Call SAP ABAP function modules from R. The RFC protocol is
     implemented in Rust and ships prebuilt, so no SAP NW RFC SDK download, no

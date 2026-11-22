@@ -52,6 +52,18 @@ attr(err, "key")    # "FU_NOT_FOUND"
 Switch on the key, not the message: a declared exception's message is the T100
 identity rendered (`"ID:FL Type:E Number:046 …"`), and it is translated.
 
+## Values
+
+- **DATE and TIME** take a `Date`, or exactly eight/six ASCII digits; `NA` or
+  `""` sends the initial value, so a structure read back with an initial date
+  can be sent again unchanged.
+- **Integers are range-checked.** INT1, INT2, INT4 and INT8 refuse a value
+  outside their range, `NA`, and a fraction, instead of wrapping or
+  truncating it on the way to ABAP.
+- **An INT4 holding -2147483648 reads back as `NA`.** That value *is* R's
+  `NA_integer_`, so R cannot represent it as an integer. Sending it works;
+  read it as a decimal (`P`) field if the minimum matters.
+
 ## Installation
 
 No SAP NW RFC SDK, no `--with-nwrfcsdk-*` flags, no `LD_LIBRARY_PATH`, and no
