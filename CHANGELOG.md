@@ -2,6 +2,18 @@
 
 All notable changes to `rsap`. Calendar versioning, `YYYY.M.D`.
 
+## 2026.11.23
+
+Built on the current shim. `examples/run_both.sh` against SAP's library: **no
+differences across 47 lines**; 69 live checks pass against a4h (kernel 816), none
+skipped.
+
+- **The shim is faster under parallel reads and on text.** Table cell reads
+  share the registry lock instead of queueing on one exclusive lock, and text is
+  converted to UTF-8 without allocating, with ASCII copied in one pass. On
+  erpl's 297,000-row DD04T read through the same shim, measured in one run,
+  it now takes 6.4 s against SAP's library's 7.0 s (erpl-proto #99, #102).
+
 ## 2026.11.22
 
 Built on the current shim. `examples/run_both.sh` against SAP's library: **no
